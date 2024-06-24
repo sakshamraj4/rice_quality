@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 import tempfile
 import os
-from io import BytesIO
 import zipfile
 from PIL import Image
 
@@ -70,6 +69,7 @@ def save_to_zip(selections):
 
 # Streamlit app
 st.set_page_config(layout="wide")  # Utilize full screen
+
 st.markdown(
     """
     <style>
@@ -159,11 +159,11 @@ if uploaded_file is not None:
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     original_image = cv2.imdecode(file_bytes, 1)
 
-    # Resize image for processing
+    # Resize image for display
     resized_image = resize_image(original_image)
 
-    # Display the original image
-    st.image(original_image, caption='Original Image', use_column_width=True)
+    # Display the resized image
+    st.image(resized_image, caption='Original Image', use_column_width=True)
 
     # Process the resized image and get selected images
     image_info = process_image(resized_image, min_area)
