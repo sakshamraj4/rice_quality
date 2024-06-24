@@ -4,6 +4,7 @@ import numpy as np
 import tempfile
 import os
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
 # Function to resize the image if it's too large
@@ -36,7 +37,7 @@ def process_image(image, min_area):
     # Filter out small contours
     filtered_contours = [contour for contour in contours if cv2.contourArea(contour) > min_area]
 
-    for i, contour in enumerate(filtered_contours):
+    def process_contour(contour):
         # Get bounding box for each contour
         x, y, w, h = cv2.boundingRect(contour)
 
@@ -48,7 +49,17 @@ def process_image(image, min_area):
         image_size_kb = len(buffer) / 1024  # Size in KB
         image_size_mb = image_size_kb / 1024  # Size in MB
 
-        image_info.append((i, w, h, image_size_kb, image_size_mb, cropped_image))
+        return (w, h, image_size_kb, image_size_mb, cropped_image)
+
+    # Process contours in parallel
+    with ThreadPoolExecutor() as executor:
+        futures = [executor.submit(process_contour, contour) for contour in filtered_contours]
+        results = [future.result() for future in futures]
+
+    # Combine results
+    for i, result in enumerate(results):
+        w, h, size_kb, size_mb, cropped_image = result
+        image_info.append((i, w, h, size_kb, size_mb, cropped_image))
 
     return image_info
 
