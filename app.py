@@ -7,6 +7,8 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
+Image.MAX_IMAGE_PIXELS = None
+
 # Function to resize the image if it's too large
 def resize_image(image, max_width=1024, max_height=1024):
     h, w = image.shape[:2]
@@ -15,14 +17,13 @@ def resize_image(image, max_width=1024, max_height=1024):
         new_w = int(w * scale_factor)
         new_h = int(h * scale_factor)
         image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
-    return image
+    return image, scale_factor
 
-# Function to process the image and extract rice grains
-def process_image(image, min_area):
+def process_image(resized_image, og_image, scale_factor, min_area):
     image_info = []  # List to store image information (size in pixels and file size)
     
     # Convert to grayscale
-    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
 
     # Apply Gaussian blur to reduce noise
     blurred_image = cv2.GaussianBlur(gray_image, (5, 5), 0)
@@ -41,15 +42,23 @@ def process_image(image, min_area):
         # Get bounding box for each contour
         x, y, w, h = cv2.boundingRect(contour)
 
-        # Crop the region
-        cropped_image = image[y:y + h, x:x + w]
-
-        # Encode image to bytes
-        _, buffer = cv2.imencode('.png', cropped_image)
-        image_size_kb = len(buffer) / 1024  # Size in KB
-        image_size_mb = image_size_kb / 1024  # Size in MB
-
-        return (w, h, image_size_kb, image_size_mb, cropped_image)
+        x_og = int(x / scale_factor)
+        y_og = int(y / scale_factor)
+        w_new = int(w / scale_factor)
+        h_new = int(h / scale_factor)
+        
+        if w_new > 150 and h_new > 150:        
+            # Crop the region
+            cropped_image = og_image[y_og:y_og + h_new, x_og:x_og + w_new]
+            
+            # Encode image to bytes
+            _, buffer = cv2.imencode('.png', cropped_image)
+            image_size_kb = len(buffer) / 1024  # Size in KB
+            image_size_mb = image_size_kb / 1024  # Size in MB
+            
+            return (w_new, h_new, image_size_kb, image_size_mb, cropped_image)
+        else:
+            return None
 
     # Process contours in parallel
     with ThreadPoolExecutor() as executor:
@@ -58,9 +67,11 @@ def process_image(image, min_area):
 
     # Combine results
     for i, result in enumerate(results):
-        w, h, size_kb, size_mb, cropped_image = result
-        image_info.append((i, w, h, size_kb, size_mb, cropped_image))
-
+        if result is None:
+            continue
+        w_new, h_new, size_kb, size_mb, cropped_image = result
+        image_info.append((i, w_new, h_new, size_kb, size_mb, cropped_image))
+    
     return image_info
 
 # Function to save selected images to a zip file with higher quality
@@ -87,7 +98,7 @@ st.markdown(
     .reportview-container {
         background: url("https://i.imgur.com/8a7Ujv8.jpg");
         background-size: cover;
-        color: #eeeeee;
+        color: #0000FF;
     }
     .sidebar .sidebar-content {
         background: #393e46;
@@ -97,7 +108,7 @@ st.markdown(
         padding: 20px;
     }
     .css-1d391kg p {
-        color: #eeeeee;
+        color: #0000FF;
     }
     .stButton button {
         background-color: #00adb5;
@@ -128,7 +139,7 @@ st.markdown(
         background: #393e46;
     }
     .css-1offfwp .css-1l3cr7v p {
-        color: #eeeeee;
+        color: #0000FF;
     }
     .selectbox, .checkbox, .file_uploader {
         color: #00adb5;
@@ -142,9 +153,9 @@ st.title("🌾Grain Extraction")
 
 # Instructions
 with st.expander("Instructions", expanded=True):
-    st.markdown("<p style='color:#eeeeee;'>1. Upload an image containing grains.</p>", unsafe_allow_html=True)
-    st.markdown("<p style='color:#eeeeee;'>2. Select the grains you want to extract.</p>", unsafe_allow_html=True)
-    st.markdown("<p style='color:#eeeeee;'>3. Click the 'Extract' button to download the selected grains as a ZIP file.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#0000FF;'>1. Upload an image containing grains.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#0000FF;'>2. Select the grains you want to extract.</p>", unsafe_allow_html=True)
+    st.markdown("<p style='color:#0000FF;'>3. Click the 'Extract' button to download the selected grains as a ZIP file.</p>", unsafe_allow_html=True)
 
 # Sidebar for input
 with st.sidebar:
@@ -152,7 +163,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 
     # User input for minimum area
-    min_area = st.number_input("Enter the minimum area for grains to be extracted:", value=3000, min_value=0)
+    min_area = st.number_input("Enter the minimum area for grains to be extracted:", value=400, min_value=0)
 
     # Define size filter options
     size_filter = st.selectbox("Select size range to display images:",
@@ -169,16 +180,16 @@ if uploaded_file is not None:
     # Read the image
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     original_image = cv2.imdecode(file_bytes, 1)
-
+    original_image = cv2.cvtColor(original_image,cv2.COLOR_BGR2RGB)
     # Resize image for display
-    resized_image = resize_image(original_image)
+    resized_image,scalefactor = resize_image(original_image)
 
     # Display the resized image
-    st.image(resized_image, caption='Original Image', use_column_width=True)
+    st.image(original_image, caption='Original Image', use_column_width=True)
 
     # Process the resized image and get selected images
-    image_info = process_image(resized_image, min_area)
-
+    image_info = process_image(resized_image, original_image, scalefactor, min_area)
+    
     # Filter images based on selected size range
     if size_filter == "0-0.03 MB":
         filtered_images = [info for info in image_info if info[4] <= 0.03]
@@ -197,15 +208,15 @@ if uploaded_file is not None:
 
     # Calculate and display the total number of grains extracted
     total_grains_extracted = len(image_info)
-    st.write(f"<p style='color:#eeeeee;'>Total number of grains extracted: {total_grains_extracted}</p>", unsafe_allow_html=True)
+    st.write(f"<p style='color:#0000FF;'>Total number of grains extracted: {total_grains_extracted}</p>", unsafe_allow_html=True)
 
     for i, (idx, w, h, size_kb, size_mb, cropped_image) in enumerate(filtered_images):
         if i % max_images_per_row == 0:
             col = st.columns(max_images_per_row)  # Create a new row
         with col[i % max_images_per_row]:
-            st.image(cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB), caption=f"Grain {idx + 1}")
-            st.write(f"<p style='color:#eeeeee;'>Size: {w} x {h} pixels</p>", unsafe_allow_html=True)
-            st.write(f"<p style='color:#eeeeee;'>File Size: {size_kb:.2f} KB ({size_mb:.2f} MB)</p>", unsafe_allow_html=True)
+            st.image(cropped_image, caption=f"Grain {idx + 1}")
+            st.write(f"<p style='color:#0000FF;'>Size: {w} x {h} pixels</p>", unsafe_allow_html=True)
+            st.write(f"<p style='color:#0000FF;'>File Size: {size_kb:.2f} KB ({size_mb:.2f} MB)</p>", unsafe_allow_html=True)
             checkbox = st.checkbox(f"Select Grain {idx + 1}", key=f"select_{idx}", value=select_all)
             checkboxes.append((checkbox, (f"Grain {idx + 1}", cropped_image)))
 
@@ -214,7 +225,7 @@ if uploaded_file is not None:
 
     # Display the total number of selected images
     total_selected_images = len(selections)
-    st.write(f"<p style='color:#eeeeee;'>Total number of selected images: {total_selected_images}</p>", unsafe_allow_html=True)
+    st.write(f"<p style='color:#0000FF;'>Total number of selected images: {total_selected_images}</p>", unsafe_allow_html=True)
 
     # Handle the extract button click event
     if extract_button:
