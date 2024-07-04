@@ -82,8 +82,9 @@ def save_to_zip(selections):
             for i, (name, image) in enumerate(selections):
                 image_filename = f"{name}.png"
                 image_path = os.path.join(tmpdirname, image_filename)
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
                 # Save the image with higher quality
-                cv2.imwrite(image_path, image, [cv2.IMWRITE_PNG_COMPRESSION, 9])  # Compression quality set to maximum (0-9)
+                cv2.imwrite(image_path, rgb_image, [cv2.IMWRITE_PNG_COMPRESSION, 9])  # Compression quality set to maximum (0-9)
                 zipf.write(image_path, image_filename)
         with open(zip_path, 'rb') as f:
             zip_data = f.read()
