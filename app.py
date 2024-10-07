@@ -7,69 +7,185 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
-Image.MAX_IMAGE_PIXELS = None
+# Function to find the top-left corner of the white box
+def find_top_left_corner(img_array, threshold):
+    rows, cols = img_array.shape
+
+    top_row, top_col = 0, 0
+    for row in range(rows):
+        row_values = img_array[row, :]
+        if np.mean(row_values) > threshold:
+            top_row = row
+            break
+
+    for col in range(cols):
+        col_values = img_array[:, col]
+        if np.mean(col_values) > threshold:
+            top_col = col
+            break
+
+    return top_row + 30, top_col + 30
+
+# Function to find the bottom-right corner of the white box
+def find_bottom_right_corner(img_array, threshold):
+    rows, cols = img_array.shape
+
+    bottom_row, bottom_col = rows - 1, cols - 1
+
+    # Start from the bottom row and move upwards to find the first row with white pixels
+    for row in range(rows - 1, -1, -1):
+        row_values = img_array[row, :]
+        if np.mean(row_values) > threshold:
+            bottom_row = row
+            break
+
+    # Start from the rightmost column and move left to find the first column with white pixels
+    for col in range(cols - 1, -1, -1):
+        col_values = img_array[:, col]
+        if np.mean(col_values) > threshold:
+            bottom_col = col
+            break
+
+    return bottom_row - 30, bottom_col - 30
+
 
 def crop_and_remove_black(image, threshold):
-    gray_img = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    def find_top_left_corner(img_array):
-        rows, cols = img_array.shape
-        for row in range(rows):
-            if np.mean(img_array[row, :]) > threshold:
-                for col in range(cols):
-                    if np.mean(img_array[:, col]) > threshold:
-                        return row + 30, col + 30
-        return 0, 0
+    # Convert the image to grayscale and numpy array again
+    gray_img = image.convert("L")
+    gray_img_array = np.array(gray_img)
 
-    def find_bottom_right_corner(img_array):
-        rows, cols = img_array.shape
-        for row in range(rows - 1, -1, -1):
-            if np.mean(img_array[row, :]) > threshold:
-                for col in range(cols - 1, -1, -1):
-                    if np.mean(img_array[:, col]) > threshold:
-                        return row - 30, col - 30
-        return rows - 1, cols - 1
+    # Find the top-left and bottom-right corners of this cropped part
+    top_left = find_top_left_corner(gray_img_array, threshold)
+    bottom_right = find_bottom_right_corner(gray_img_array, threshold)
 
-    top_left = find_top_left_corner(gray_img)
-    bottom_right = find_bottom_right_corner(gray_img)
-    
-    return image[top_left[0]:bottom_right[0], top_left[1]:bottom_right[1]], top_left, bottom_right
+    return image.crop((top_left[1], top_left[0], bottom_right[1], bottom_right[0])), top_left, bottom_right
 
-def threshold_image(gray):
-    blurred_image = cv2.GaussianBlur(gray, (5, 5), 0)
-    thresh_image = cv2.adaptiveThreshold(blurred_image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, blockSize=15, C=2)
-    return thresh_image
+# Now, crop the image into four parts and remove internal black boundaries
+def crop_blackbox(img,grid_flag):
+    if grid_flag:
+        # Save each quadrant
+        quadrants = []
+        x_off = []
+        y_off = []
+        image = img
+        black_threshold = 150
 
-def edge_detection(thresh):
-    edges = cv2.Canny(thresh, 50, 150)
-    kernel = np.ones((3, 3), np.uint8)
-    edges_dilated = cv2.dilate(edges, kernel, iterations=1)
-    edges_closed = cv2.morphologyEx(edges_dilated, cv2.MORPH_CLOSE, kernel)
-    return edges_closed
+        width, height = image.size
+        crop_width = width // 2
+        crop_height = height // 2
 
-def remove_noise(edges):
-    kernel = np.ones((3, 3), np.uint8)
-    edges_eroded = cv2.erode(edges, kernel, iterations=1)
-    return edges_eroded
+        part1, part1_top, part1_bottom = crop_and_remove_black(image.crop((0, 0, crop_width, crop_height)), black_threshold)
+        part1_x1, part1_y1, part1_x2, part1_y2 = part1_top[0], part1_top[1], part1_bottom[0], part1_bottom[1]
+        x_off.append(part1_top[0])
+        y_off.append(part1_top[1])
+        quadrants.append(part1)
+
+        part2, part2_top, part2_bottom = crop_and_remove_black(image.crop((crop_width, 0, width, crop_height)), black_threshold)
+        part2_x1, part2_y1, part2_x2, part2_y2 = part2_top[0], crop_width+part2_top[1], part2_bottom[0], crop_width+part2_bottom[1]
+        x_off.append(part2_top[0])
+        y_off.append(crop_width+part2_top[1])
+        quadrants.append(part2)
+
+        part3, part3_top, part3_bottom = crop_and_remove_black(image.crop((0, crop_height, crop_width, height)), black_threshold)
+        part3_x1, part3_y1, part3_x2, part3_y2 = crop_height+part3_top[0], part3_top[1], crop_height+part3_bottom[0], part3_bottom[1]
+        x_off.append(crop_height+part3_top[0])
+        y_off.append(part3_top[1])
+        quadrants.append(part3)
+
+        part4, part4_top, part4_bottom = crop_and_remove_black(image.crop((crop_width, crop_height, width, height)), black_threshold)
+        part4_x1, part4_y1, part4_x2, part4_y2 = crop_height+part4_top[0], crop_width+part4_top[1], crop_height+part4_bottom[0], crop_width+part4_bottom[1]
+        x_off.append(crop_height+part4_top[0])
+        y_off.append(crop_width+part4_top[1])
+        quadrants.append(part4)
+
+    else:
+      quadrants=[img]
+      x_off=[0]
+      y_off=[0]
+
+    return quadrants, x_off, y_off
 
 def contours_overlap(contour_a, contour_b):
+    # Implement logic to determine if contours overlap
+    # For simplicity, you can compare the bounding rectangles
     rect_a = cv2.boundingRect(contour_a)
     rect_b = cv2.boundingRect(contour_b)
-    return not (rect_a[0] + rect_a[2] < rect_b[0] or rect_a[0] > rect_b[0] + rect_b[2] or
-                rect_a[1] + rect_a[3] < rect_b[1] or rect_a[1] > rect_b[1] + rect_b[3])
+    overlap = not (rect_a[0] + rect_a[2] < rect_b[0] or rect_a[0] > rect_b[0] + rect_b[2] or
+                   rect_a[1] + rect_a[3] < rect_b[1] or rect_a[1] > rect_b[1] + rect_b[3])
+    return overlap
+
 
 def unique_contours(contours):
-    return [contour for i, contour in enumerate(contours) 
-            if all(not np.array_equal(contour, other_cont) for j, other_cont in enumerate(contours) if i != j)]
+    unique = []
+    for contour in contours:
+        if all(not np.array_equal(contour, unique_cont) for unique_cont in unique):
+            unique.append(contour)
+    return unique
 
-def find_contours(masked_image, min_area):
+def translate_contours_to_original(contours, x_offset,y_offset):
+
+    translated_contours = []
+    for contour in contours:
+      translated_contour = [(point[0][0] + y_offset, point[0][1] + x_offset) for point in contour]
+      translated_contours.append(translated_contour)
+
+    return translated_contours
+
+def resize_image(image, max_width=1024, max_height=1024):
+    h, w = image.shape[:2]
+    if h > max_height or w > max_width:
+        scale_factor = min(max_width / w, max_height / h)
+        new_w = int(w * scale_factor)
+        new_h = int(h * scale_factor)
+        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    return image, scale_factor
+
+# Apply adaptive thresholding to segment grains and coin
+def threshold_image(gray):
+    blurred_image = cv2.GaussianBlur(gray, (5, 5), 0)
+
+    # Apply adaptive thresholding (using mean method)
+    thresh_image = cv2.adaptiveThreshold(blurred_image, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, blockSize=15, C=2)
+
+    # _, thresh_image = cv2.threshold(blurred_image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    return thresh_image
+
+# Apply Canny Edge Detection to find edges
+def edge_detection(thresh):
+    edges = cv2.Canny(thresh, 50, 150)
+
+    # Apply dilation to connect broken edges
+    kernel = np.ones((3, 3), np.uint8)  # 3x3 kernel for dilation
+    edges_dilated = cv2.dilate(edges, kernel, iterations=1)
+
+    # Apply closing to fill small gaps and solidify contours
+    edges_closed = cv2.morphologyEx(edges_dilated, cv2.MORPH_CLOSE, kernel)
+
+    return edges_closed
+
+# Erosion to remove small noise
+def remove_noise(edges):
+    # Apply erosion to reduce noise inside contours
+    kernel = np.ones((3, 3), np.uint8)
+    edges_eroded = cv2.erode(edges, kernel, iterations=1)
+
+    return edges_eroded
+
+# Find contours in the masked image
+def find_contours(masked_image, scale_factor, area_image, min_area):
+    contours1_2 = []
+
+    # Find contours
     contours, _ = cv2.findContours(masked_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    area_image = masked_image.shape[0] * masked_image.shape[1]
-    
+
+    # Filter out small contours
     filtered_contours = [contour for contour in contours
-                         if len(contour) >= 5 and 0.5 * area_image >= cv2.contourArea(contour) > min_area]
-    
+        if len(contour) >= 5
+        and 0.5 * area_image >= cv2.contourArea(contour) > min_area]
+
     non_overlapping_contours = []
+
     for i, contour_a in enumerate(filtered_contours):
         overlap = False
         for j, contour_b in enumerate(filtered_contours):
@@ -77,60 +193,114 @@ def find_contours(masked_image, min_area):
                 overlap = True
                 if cv2.arcLength(contour_a, True) > cv2.arcLength(contour_b, True):
                     non_overlapping_contours.append(contour_a)
+
                 break
         if not overlap:
             non_overlapping_contours.append(contour_a)
-    
-    return unique_contours(non_overlapping_contours)
 
-def process_contour(contour, original_image, pad):
+    # Deduplicate the list
+    non_overlapping_contours = unique_contours(non_overlapping_contours)
+
+    # return filtered_contours
+
+    def scale_contours(contour):
+        # Scale each point in the contour
+        scaled_contour = np.array(contour, dtype=np.float32) / scale_factor
+        scaled_contour = np.int32(scaled_contour)  # Convert back to integer coordinates
+
+        return scaled_contour
+
+    # Process contours in parallel
+    with ThreadPoolExecutor() as executor:
+        futures = [executor.submit(scale_contours, contour) for contour in non_overlapping_contours]
+        results = [future.result() for future in futures]
+
+    # Combine results
+    for i, result in enumerate(results):
+        if result is None:
+            continue
+        contours1_2.append(result)
+
+    return contours1_2
+
+def process_contour(contour, bbox_mask2, pad):
+    bbox_mask2 = cv2.cvtColor(bbox_mask2, cv2.COLOR_BGR2RGB)
     x, y, w, h = cv2.boundingRect(contour)
-    image_height, image_width = original_image.shape[:2]
+    image_height, image_width = bbox_mask2.shape[:2]
+
     padded_x = max(x - pad, 0)
     padded_y = max(y - pad, 0)
     padded_w = min(w + 2 * pad, image_width - padded_x)
     padded_h = min(h + 2 * pad, image_height - padded_y)
-    cropped_img = original_image[padded_y:padded_y + padded_h, padded_x:padded_x + padded_w]
-    
-    # Calculate size in KB and MB
-    _, buffer = cv2.imencode('.png', cropped_img)
-    image_size_kb = len(buffer) / 1024
-    image_size_mb = image_size_kb / 1024
-    
-    return padded_w, padded_h, image_size_kb, image_size_mb, cropped_img
 
-def process_image(original_image, min_area):
-    image_info = []
+    cropped_img = bbox_mask2[padded_y:padded_y + padded_h, padded_x:padded_x + padded_w]
+    return cropped_img  # Return the cropped image directly
+
+def process_image(original_image_color, grid_flag):
+
+    height, width, channels = original_image_color.shape
+
+    if grid_flag:
+      clip_margin = int((8 / 100) * width)
+
+    else:
+      clip_margin=0
+
     
-    # Crop and remove black borders
-    cropped_image, _, _ = crop_and_remove_black(original_image, threshold=150)
+    cropped_box, x_off, y_off = crop_blackbox(original_image_color, grid_flag)
+    contours1_2=[]
+
+    for n, x_offset,y_offset in zip(cropped_box, x_off,y_off):
+
+        # Step 1: Load the original image
+        original_image = n
+        
+        image = cv2.cvtColor(original_image,cv2.COLOR_BGR2RGB)
+        
+        image, scalefactor = resize_image(image)
+        
+        original_image = ''
+        # resized_image, scalefactor = original_image, 1
+        # Calculate the area
+        height, width,_ = image.shape
+        area_image = width * height
+        
+        # Convert to grayscale
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Apply adaptive thresholding (using mean method)
+        image = threshold_image(image)
+        
+        image = edge_detection(image)
+        
+        # Step 5: Remove noise by applying erosion
+        image = remove_noise(image)
+        
+        # Step 6: Find contours in the black background image
+        contours = find_contours(image, scalefactor, area_image, 100)
+        
+        contours = translate_contours_to_original(contours, x_offset,y_offset)
+        contours = [np.array(contour, dtype=np.int32).reshape((-1, 1, 2)) for contour in contours]
+        
+        contours1_2.extend(contours)
+        contours = ''
+
+    # Step 7: Draw those contours on the original image
+    image = draw_contours_on_original(original_image_color, contours1_2)
     
-    # Convert to grayscale
-    gray_image = cv2.cvtColor(cropped_image, cv2.COLOR_BGR2GRAY)
+    print(f"Number of contours found: {len(contours1_2)}")
     
-    # Apply thresholding
-    thresh_image = threshold_image(gray_image)
+    croped_image_list =list()
+    for contour in contours1_2:
+        croped_image_list.append(process_contour(contour, cv2.cvtColor(original_image_color,cv2.COLOR_BGR2RGB), 20))
     
-    # Apply edge detection
-    edges = edge_detection(thresh_image)
+    return croped_image_list, contours1_2
     
-    # Remove noise
-    cleaned_edges = remove_noise(edges)
-    
-    # Find contours
-    contours = find_contours(cleaned_edges, min_area)
-    
-    # Process contours in parallel
-    with ThreadPoolExecutor() as executor:
-        futures = [executor.submit(process_contour, contour, cropped_image, 20) for contour in contours]
-        results = [future.result() for future in futures]
-    
-    # Combine results
-    for i, result in enumerate(results):
-        w_new, h_new, size_kb, size_mb, cropped_img = result
-        image_info.append((i, w_new, h_new, size_kb, size_mb, cropped_img))
-    
-    return image_info
+# Draw contours on the original image
+def draw_contours_on_original(original_image, contours):
+    contour_image = original_image.copy()
+    cv2.drawContours(contour_image, contours, -1, (0, 255, 0), 15)
+    return contour_image
 
 # Function to save selected images to a zip file with higher quality
 def save_to_zip(selections):
@@ -140,7 +310,9 @@ def save_to_zip(selections):
             for i, (name, image) in enumerate(selections):
                 image_filename = f"{name}.png"
                 image_path = os.path.join(tmpdirname, image_filename)
-                cv2.imwrite(image_path, image, [cv2.IMWRITE_PNG_COMPRESSION, 9])  # Compression quality set to maximum (0-9)
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                # Save the image with higher quality
+                cv2.imwrite(image_path, rgb_image, [cv2.IMWRITE_PNG_COMPRESSION, 9])  # Compression quality set to maximum (0-9)
                 zipf.write(image_path, image_filename)
         with open(zip_path, 'rb') as f:
             zip_data = f.read()
@@ -220,11 +392,7 @@ with st.sidebar:
     uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
 
     # User input for minimum area
-    min_area = st.number_input("Enter the minimum area for grains to be extracted:", value=400, min_value=0)
-
-    # Define size filter options
-    size_filter = st.selectbox("Select size range to display images:",
-                               ["All", "0-0.03 MB", "0.031-0.06 MB", "0.061-0.09 MB", ">0.09 MB"])
+    grid_flag = st.checkbox("Grid Image", key="True_False", value=False)
 
     # Select all checkbox
     select_all = st.checkbox("Select All", key="select_all", value=False)
@@ -237,42 +405,35 @@ if uploaded_file is not None:
     # Read the image
     file_bytes = np.asarray(bytearray(uploaded_file.read()), dtype=np.uint8)
     original_image = cv2.imdecode(file_bytes, 1)
+    original_image = cv2.cvtColor(original_image,cv2.COLOR_BGR2RGB)
     
-    # Display the original image
-    st.image(cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB), caption='Original Image', use_column_width=True)
+    # Display the resized image
+    st.image(original_image, caption='Original Image', use_column_width=True)
 
-    # Process the image and get selected images
-    image_info = process_image(original_image, min_area)
+    # Process the resized image and get selected images
+    croped_images, contours = process_image(original_image, grid_flag)
+
+    # Display the resized image
+    st.image(draw_contours_on_original(original_image, contours), caption='Original Image', use_column_width=True)
     
-    # Filter images based on selected size range
-    if size_filter == "0-0.03 MB":
-        filtered_images = [info for info in image_info if info[4] <= 0.03]
-    elif size_filter == "0.031-0.06 MB":
-        filtered_images = [info for info in image_info if 0.031 <= info[4] <= 0.06]
-    elif size_filter == "0.061-0.09 MB":
-        filtered_images = [info for info in image_info if 0.061 <= info[4] <= 0.09]
-    elif size_filter == ">0.09 MB":
-        filtered_images = [info for info in image_info if info[4] > 0.09]
-    else:
-        filtered_images = image_info
-
     # Display filtered images
     max_images_per_row = 4
     checkboxes = []
 
     # Calculate and display the total number of grains extracted
-    total_grains_extracted = len(image_info)
+    total_grains_extracted = len(croped_images)
     st.write(f"<p style='color:#0000FF;'>Total number of grains extracted: {total_grains_extracted}</p>", unsafe_allow_html=True)
 
-    for i, (idx, w, h, size_kb, size_mb, cropped_image) in enumerate(filtered_images):
+    i = 0
+    for cropped_image in croped_images:
         if i % max_images_per_row == 0:
             col = st.columns(max_images_per_row)  # Create a new row
         with col[i % max_images_per_row]:
-            st.image(cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB), caption=f"Grain {idx + 1}")
-            st.write(f"<p style='color:#0000FF;'>Size: {w} x {h} pixels</p>", unsafe_allow_html=True)
-            st.write(f"<p style='color:#0000FF;'>File Size: {size_kb:.2f} KB ({size_mb:.2f} MB)</p>", unsafe_allow_html=True)
-            checkbox = st.checkbox(f"Select Grain {idx + 1}", key=f"select_{idx}", value=select_all)
-            checkboxes.append((checkbox, (f"Grain {idx + 1}", cropped_image)))
+            st.image(cropped_image, caption=f"Grain {i + 1}")
+            checkbox = st.checkbox(f"Select Grain {i + 1}", key=f"select_{i}", value=select_all)
+            checkboxes.append((checkbox, (f"Grain {i + 1}", cropped_image)))
+
+        i = i + 1
 
     # Update selections based on checkboxes
     selections = [img_info for selected, img_info in checkboxes if selected]
